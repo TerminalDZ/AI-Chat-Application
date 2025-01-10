@@ -5,10 +5,15 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const multer = require('multer');
+const speedInsights = require("@vercel/speed-insights/next");
 
+// Create Express app
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+
+
 
 // In-memory storage
 const CONVERSATIONS = [];
@@ -320,4 +325,9 @@ app.listen(PORT, () => {
     console.log(`\n=== Server Started ===`);
     console.log(`Server running on port ${PORT}`);
     console.log('===================\n');
+});
+
+// Speed Insights
+speedInsights(app, {
+    version: 'v1'
 });
