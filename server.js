@@ -2,14 +2,71 @@ require('dotenv').config();
 const express = require('express');
 const OpenAI = require('openai');
 const cors = require('cors');
-const sqlite3 = require('sqlite3').verbose();
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const multer = require('multer');
+const fs = require('fs').promises;
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Data file paths
+const CONVERSATIONS_FILE = path.join(__dirname, 'data', 'conversations.json');
+const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
+const DEBUG_MESSAGES_FILE = path.join(__dirname, 'data', 'debug_messages.json');
+
+// Ensure data directory and files exist
+async function ensureDataFiles() {
+    try {
+        await fs.mkdir(path.join(__dirname, 'data'), { recursive: true });
+        
+        // Check and create conversations.json if not exists
+        try {
+            await fs.access(CONVERSATIONS_FILE);
+        } catch {
+            await fs.writeFile(CONVERSATIONS_FILE, JSON.stringify({ conversations: [] }));
+        }
+        
+        // Check and create messages.json if not exists
+        try {
+            await fs.access(MESSAGES_FILE);
+        } catch {
+            await fs.writeFile(MESSAGES_FILE, JSON.stringify({ messages: [] }));
+        }
+        
+        // Check and create debug_messages.json if not exists
+        try {
+            await fs.access(DEBUG_MESSAGES_FILE);
+        } catch {
+            await fs.writeFile(DEBUG_MESSAGES_FILE, JSON.stringify({ messages: [] }));
+        }
+    } catch (error) {
+        console.error('Error ensuring data files:', error);
+    }
+}
+
+// Data management functions
+async function readJsonFile(filePath) {
+    try {
+        const data = await fs.readFile(filePath, 'utf8');
+        return JSON.parse(data);
+    } catch (error) {
+        console.error(`Error reading ${filePath}:`, error);
+        return null;
+    }
+}
+
+async function writeJsonFile(filePath, data) {
+    try {
+        await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+    } catch (error) {
+        console.error(`Error writing ${filePath}:`, error);
+    }
+}
+
+// Initialize data files
+ensureDataFiles();
 
 // Middleware for logging requests and responses
 app.use((req, res, next) => {
@@ -41,43 +98,6 @@ app.use((req, res, next) => {
 app.use(cors());
 app.use(express.static('public'));
 
-// Initialize SQLite database
-const db = new sqlite3.Database('chat.db', (err) => {
-    if (err) {
-        console.error('Error opening database:', err);
-    } else {
-        console.log('Connected to SQLite database');
-        initializeDatabase();
-    }
-});
-
-// Create database tables
-function initializeDatabase() {
-    db.serialize(() => {
-        // Create conversations table
-        db.run(`
-            CREATE TABLE IF NOT EXISTS conversations (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        `);
-
-        // Create messages table
-        db.run(`
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                conversation_id TEXT,
-                role TEXT,
-                content TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                message_type TEXT DEFAULT 'chat',
-                FOREIGN KEY (conversation_id) REFERENCES conversations(id)
-            )
-        `);
-    });
-}
-
 const token = process.env.GITHUB_TOKEN;
 const endpoint = "https://models.inference.ai.azure.com";
 
@@ -94,64 +114,58 @@ let currentModel = AVAILABLE_MODELS['gpt-4o']; // Default model
 const client = new OpenAI({ baseURL: endpoint, apiKey: token });
 
 // Get all conversations
-app.get('/api/conversations', (req, res) => {
-    db.all('SELECT * FROM conversations ORDER BY created_at DESC', [], (err, rows) => {
-        if (err) {
-            console.error('Error fetching conversations:', err);
-            res.status(500).json({ error: 'Failed to fetch conversations' });
-            return;
-        }
-        res.json(rows);
-    });
+app.get('/api/conversations', async (req, res) => {
+    try {
+        const data = await readJsonFile(CONVERSATIONS_FILE);
+        res.json(data.conversations);
+    } catch (error) {
+        console.error('Error getting conversations:', error);
+        res.status(500).json({ error: 'Failed to get conversations' });
+    }
 });
 
 // Get messages for a specific conversation
-app.get('/api/conversations/:id/messages', (req, res) => {
-    const { id } = req.params;
-    db.all(
-        'SELECT * FROM messages WHERE conversation_id = ? AND message_type = ? ORDER BY created_at ASC', 
-        [id, 'chat'], 
-        (err, rows) => {
-            if (err) {
-                console.error('Error fetching messages:', err);
-                res.status(500).json({ error: 'Failed to fetch messages' });
-                return;
-            }
-            res.json(rows);
-        }
-    );
+app.get('/api/conversations/:id/messages', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const data = await readJsonFile(MESSAGES_FILE);
+        const conversationMessages = data.messages.filter(msg => msg.conversation_id === id && msg.message_type === 'chat');
+        res.json(conversationMessages);
+    } catch (error) {
+        console.error('Error getting messages:', error);
+        res.status(500).json({ error: 'Failed to get messages' });
+    }
 });
 
 // Get debug messages for a specific conversation
-app.get('/api/conversations/:id/debug', (req, res) => {
-    const { id } = req.params;
-    db.all(
-        'SELECT * FROM messages WHERE conversation_id = ? AND message_type = ? ORDER BY created_at ASC', 
-        [id, 'debug'], 
-        (err, rows) => {
-            if (err) {
-                console.error('Error fetching debug messages:', err);
-                res.status(500).json({ error: 'Failed to fetch debug messages' });
-                return;
-            }
-            res.json(rows);
-        }
-    );
+app.get('/api/conversations/:id/debug', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const data = await readJsonFile(DEBUG_MESSAGES_FILE);
+        const conversationMessages = data.messages.filter(msg => msg.conversation_id === id);
+        res.json(conversationMessages);
+    } catch (error) {
+        console.error('Error getting debug messages:', error);
+        res.status(500).json({ error: 'Failed to get debug messages' });
+    }
 });
 
 // Create new conversation
-app.post('/api/conversations', (req, res) => {
-    const id = uuidv4();
-    const { title } = req.body;
-    
-    db.run('INSERT INTO conversations (id, title) VALUES (?, ?)', [id, title], (err) => {
-        if (err) {
-            console.error('Error creating conversation:', err);
-            res.status(500).json({ error: 'Failed to create conversation' });
-            return;
-        }
-        res.json({ id, title });
-    });
+app.post('/api/conversations', async (req, res) => {
+    try {
+        const data = await readJsonFile(CONVERSATIONS_FILE);
+        const newConversation = {
+            id: uuidv4(),
+            title: req.body.title,
+            created_at: new Date().toISOString()
+        };
+        data.conversations.push(newConversation);
+        await writeJsonFile(CONVERSATIONS_FILE, data);
+        res.json(newConversation);
+    } catch (error) {
+        console.error('Error creating conversation:', error);
+        res.status(500).json({ error: 'Failed to create conversation' });
+    }
 });
 
 app.post('/api/chat', express.json({ limit: '50mb' }), async (req, res) => {
@@ -228,22 +242,27 @@ Provide detailed, accurate solutions with explanations. When dealing with code, 
         const aiMessageId = uuidv4();
 
         // Save user message
-        await new Promise((resolve, reject) => {
-            db.run(
-                'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
-                [messageId, conversationId, 'user', message],
-                (err) => err ? reject(err) : resolve()
-            );
+        const messagesData = await readJsonFile(MESSAGES_FILE);
+        messagesData.messages.push({
+            id: messageId,
+            conversation_id: conversationId,
+            role: 'user',
+            content: message,
+            created_at: new Date().toISOString(),
+            message_type: 'chat'
         });
+        await writeJsonFile(MESSAGES_FILE, messagesData);
 
         // Save AI response
-        await new Promise((resolve, reject) => {
-            db.run(
-                'INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)',
-                [aiMessageId, conversationId, 'assistant', aiResponse.content],
-                (err) => err ? reject(err) : resolve()
-            );
+        messagesData.messages.push({
+            id: aiMessageId,
+            conversation_id: conversationId,
+            role: 'assistant',
+            content: aiResponse.content,
+            created_at: new Date().toISOString(),
+            message_type: 'chat'
         });
+        await writeJsonFile(MESSAGES_FILE, messagesData);
 
         res.json({
             message: aiResponse.content,
@@ -290,17 +309,15 @@ app.post('/api/chat/debug', async (req, res) => {
         const { message, conversationId } = req.body;
         
         // Save debug message
-        const debugId = uuidv4();
-        await new Promise((resolve, reject) => {
-            db.run(
-                'INSERT INTO messages (id, conversation_id, role, content, message_type) VALUES (?, ?, ?, ?, ?)',
-                [debugId, conversationId, 'system', message, 'debug'],
-                (err) => {
-                    if (err) reject(err);
-                    else resolve();
-                }
-            );
+        const debugMessagesData = await readJsonFile(DEBUG_MESSAGES_FILE);
+        debugMessagesData.messages.push({
+            id: uuidv4(),
+            conversation_id: conversationId,
+            role: 'system',
+            content: message,
+            created_at: new Date().toISOString()
         });
+        await writeJsonFile(DEBUG_MESSAGES_FILE, debugMessagesData);
         
         res.json({ success: true });
     } catch (error) {
@@ -326,20 +343,30 @@ app.post('/api/models/select', (req, res) => {
 });
 
 // Delete conversation
-app.delete('/api/conversations/:id', (req, res) => {
-    const { id } = req.params;
-    
-    db.serialize(() => {
-        db.run('DELETE FROM messages WHERE conversation_id = ?', [id]);
-        db.run('DELETE FROM conversations WHERE id = ?', [id], (err) => {
-            if (err) {
-                console.error('Error deleting conversation:', err);
-                res.status(500).json({ error: 'Failed to delete conversation' });
-                return;
-            }
-            res.json({ success: true });
-        });
-    });
+app.delete('/api/conversations/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Remove conversation
+        const conversationsData = await readJsonFile(CONVERSATIONS_FILE);
+        conversationsData.conversations = conversationsData.conversations.filter(conv => conv.id !== id);
+        await writeJsonFile(CONVERSATIONS_FILE, conversationsData);
+        
+        // Remove associated messages
+        const messagesData = await readJsonFile(MESSAGES_FILE);
+        messagesData.messages = messagesData.messages.filter(msg => msg.conversation_id !== id);
+        await writeJsonFile(MESSAGES_FILE, messagesData);
+        
+        // Remove associated debug messages
+        const debugMessagesData = await readJsonFile(DEBUG_MESSAGES_FILE);
+        debugMessagesData.messages = debugMessagesData.messages.filter(msg => msg.conversation_id !== id);
+        await writeJsonFile(DEBUG_MESSAGES_FILE, debugMessagesData);
+        
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Error deleting conversation:', error);
+        res.status(500).json({ error: 'Failed to delete conversation' });
+    }
 });
 
 const PORT = process.env.PORT || 3000;
