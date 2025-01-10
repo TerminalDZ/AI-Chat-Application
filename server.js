@@ -65,9 +65,6 @@ async function writeJsonFile(filePath, data) {
     }
 }
 
-// Initialize data files
-ensureDataFiles();
-
 // Middleware for logging requests and responses
 app.use((req, res, next) => {
     const start = Date.now();
@@ -117,10 +114,13 @@ const client = new OpenAI({ baseURL: endpoint, apiKey: token });
 app.get('/api/conversations', async (req, res) => {
     try {
         const data = await readJsonFile(CONVERSATIONS_FILE);
+        if (!data || !data.conversations) {
+            return res.json([]); // Return empty array if no data
+        }
         res.json(data.conversations);
     } catch (error) {
         console.error('Error getting conversations:', error);
-        res.status(500).json({ error: 'Failed to get conversations' });
+        res.json([]); // Return empty array on error
     }
 });
 
@@ -129,11 +129,14 @@ app.get('/api/conversations/:id/messages', async (req, res) => {
     try {
         const { id } = req.params;
         const data = await readJsonFile(MESSAGES_FILE);
-        const conversationMessages = data.messages.filter(msg => msg.conversation_id === id && msg.message_type === 'chat');
+        if (!data || !data.messages) {
+            return res.json([]);
+        }
+        const conversationMessages = data.messages.filter(msg => msg.conversation_id === id);
         res.json(conversationMessages);
     } catch (error) {
         console.error('Error getting messages:', error);
-        res.status(500).json({ error: 'Failed to get messages' });
+        res.json([]); // Return empty array on error
     }
 });
 
@@ -153,12 +156,14 @@ app.get('/api/conversations/:id/debug', async (req, res) => {
 // Create new conversation
 app.post('/api/conversations', async (req, res) => {
     try {
-        const data = await readJsonFile(CONVERSATIONS_FILE);
+        const data = await readJsonFile(CONVERSATIONS_FILE) || { conversations: [] };
         const newConversation = {
             id: uuidv4(),
-            title: req.body.title,
             created_at: new Date().toISOString()
         };
+        if (!data.conversations) {
+            data.conversations = [];
+        }
         data.conversations.push(newConversation);
         await writeJsonFile(CONVERSATIONS_FILE, data);
         res.json(newConversation);
@@ -369,9 +374,12 @@ app.delete('/api/conversations/:id', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`\n=== Server Started ===`);
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log('===================\n');
+// Initialize data files on server start
+ensureDataFiles().then(() => {
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, () => {
+        console.log(`\n=== Server Started ===`);
+        console.log(`Server running on port ${PORT}`);
+        console.log('===================\n');
+    });
 });

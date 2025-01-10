@@ -1536,6 +1536,16 @@
             }, observerOptions);
 
             codeBlocks.forEach(block => observer.observe(block));
+
+            const cameraModal = document.getElementById('cameraModal');
+            if (cameraModal) {
+                cameraModal.addEventListener('hidden.bs.modal', function () {
+                    if (cameraStream) {
+                        cameraStream.getTracks().forEach(track => track.stop());
+                        cameraStream = null;
+                    }
+                });
+            }
         });
 
         let cameraStream = null;
@@ -1627,13 +1637,6 @@
                     modal.hide();
                 });
         }
-
-        // Clean up camera stream when modal is closed
-        document.getElementById('cameraModal').addEventListener('hidden.bs.modal', function () {
-            if (cameraStream) {
-                cameraStream.getTracks().forEach(track => track.stop());
-            }
-        });
     </script>
 </body>
 </html>
