@@ -5,65 +5,15 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const multer = require('multer');
-const fs = require('fs').promises;
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Data file paths
-const CONVERSATIONS_FILE = path.join(__dirname, 'data', 'conversations.json');
-const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
-const DEBUG_MESSAGES_FILE = path.join(__dirname, 'data', 'debug_messages.json');
-
-// Ensure data directory and files exist
-async function ensureDataFiles() {
-    try {
-        await fs.mkdir(path.join(__dirname, 'data'), { recursive: true });
-        
-        // Check and create conversations.json if not exists
-        try {
-            await fs.access(CONVERSATIONS_FILE);
-        } catch {
-            await fs.writeFile(CONVERSATIONS_FILE, JSON.stringify({ conversations: [] }));
-        }
-        
-        // Check and create messages.json if not exists
-        try {
-            await fs.access(MESSAGES_FILE);
-        } catch {
-            await fs.writeFile(MESSAGES_FILE, JSON.stringify({ messages: [] }));
-        }
-        
-        // Check and create debug_messages.json if not exists
-        try {
-            await fs.access(DEBUG_MESSAGES_FILE);
-        } catch {
-            await fs.writeFile(DEBUG_MESSAGES_FILE, JSON.stringify({ messages: [] }));
-        }
-    } catch (error) {
-        console.error('Error ensuring data files:', error);
-    }
-}
-
-// Data management functions
-async function readJsonFile(filePath) {
-    try {
-        const data = await fs.readFile(filePath, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error(`Error reading ${filePath}:`, error);
-        return null;
-    }
-}
-
-async function writeJsonFile(filePath, data) {
-    try {
-        await fs.writeFile(filePath, JSON.stringify(data, null, 2));
-    } catch (error) {
-        console.error(`Error writing ${filePath}:`, error);
-    }
-}
+// In-memory storage
+const CONVERSATIONS = [];
+const MESSAGES = [];
+const DEBUG_MESSAGES = [];
 
 // Middleware for logging requests and responses
 app.use((req, res, next) => {
@@ -113,14 +63,10 @@ const client = new OpenAI({ baseURL: endpoint, apiKey: token });
 // Get all conversations
 app.get('/api/conversations', async (req, res) => {
     try {
-        const data = await readJsonFile(CONVERSATIONS_FILE);
-        if (!data || !data.conversations) {
-            return res.json([]); // Return empty array if no data
-        }
-        res.json(data.conversations);
+        res.json(CONVERSATIONS);
     } catch (error) {
-        console.error('Error getting conversations:', error);
-        res.json([]); // Return empty array on error
+        console.error('Error fetching conversations:', error);
+        res.status(500).json({ error: 'Failed to fetch conversations' });
     }
 });
 
@@ -128,15 +74,11 @@ app.get('/api/conversations', async (req, res) => {
 app.get('/api/conversations/:id/messages', async (req, res) => {
     try {
         const { id } = req.params;
-        const data = await readJsonFile(MESSAGES_FILE);
-        if (!data || !data.messages) {
-            return res.json([]);
-        }
-        const conversationMessages = data.messages.filter(msg => msg.conversation_id === id);
+        const conversationMessages = MESSAGES.filter(msg => msg.conversationId === id);
         res.json(conversationMessages);
     } catch (error) {
-        console.error('Error getting messages:', error);
-        res.json([]); // Return empty array on error
+        console.error('Error fetching messages:', error);
+        res.status(500).json({ error: 'Failed to fetch messages' });
     }
 });
 
@@ -144,28 +86,23 @@ app.get('/api/conversations/:id/messages', async (req, res) => {
 app.get('/api/conversations/:id/debug', async (req, res) => {
     try {
         const { id } = req.params;
-        const data = await readJsonFile(DEBUG_MESSAGES_FILE);
-        const conversationMessages = data.messages.filter(msg => msg.conversation_id === id);
-        res.json(conversationMessages);
+        const conversationMessages = DEBUG_MESSAGES.filter(msg => msg.conversationId === id);
+        res.json({ messages: conversationMessages });
     } catch (error) {
-        console.error('Error getting debug messages:', error);
-        res.status(500).json({ error: 'Failed to get debug messages' });
+        console.error('Error fetching debug messages:', error);
+        res.status(500).json({ error: 'Failed to fetch debug messages' });
     }
 });
 
 // Create new conversation
 app.post('/api/conversations', async (req, res) => {
     try {
-        const data = await readJsonFile(CONVERSATIONS_FILE) || { conversations: [] };
+        const conversationId = uuidv4();
         const newConversation = {
-            id: uuidv4(),
+            id: conversationId,
             created_at: new Date().toISOString()
         };
-        if (!data.conversations) {
-            data.conversations = [];
-        }
-        data.conversations.push(newConversation);
-        await writeJsonFile(CONVERSATIONS_FILE, data);
+        CONVERSATIONS.push(newConversation);
         res.json(newConversation);
     } catch (error) {
         console.error('Error creating conversation:', error);
@@ -247,27 +184,24 @@ Provide detailed, accurate solutions with explanations. When dealing with code, 
         const aiMessageId = uuidv4();
 
         // Save user message
-        const messagesData = await readJsonFile(MESSAGES_FILE);
-        messagesData.messages.push({
+        MESSAGES.push({
             id: messageId,
-            conversation_id: conversationId,
+            conversationId: conversationId,
             role: 'user',
             content: message,
             created_at: new Date().toISOString(),
             message_type: 'chat'
         });
-        await writeJsonFile(MESSAGES_FILE, messagesData);
 
         // Save AI response
-        messagesData.messages.push({
+        MESSAGES.push({
             id: aiMessageId,
-            conversation_id: conversationId,
+            conversationId: conversationId,
             role: 'assistant',
             content: aiResponse.content,
             created_at: new Date().toISOString(),
             message_type: 'chat'
         });
-        await writeJsonFile(MESSAGES_FILE, messagesData);
 
         res.json({
             message: aiResponse.content,
@@ -314,15 +248,13 @@ app.post('/api/chat/debug', async (req, res) => {
         const { message, conversationId } = req.body;
         
         // Save debug message
-        const debugMessagesData = await readJsonFile(DEBUG_MESSAGES_FILE);
-        debugMessagesData.messages.push({
+        DEBUG_MESSAGES.push({
             id: uuidv4(),
-            conversation_id: conversationId,
+            conversationId: conversationId,
             role: 'system',
             content: message,
             created_at: new Date().toISOString()
         });
-        await writeJsonFile(DEBUG_MESSAGES_FILE, debugMessagesData);
         
         res.json({ success: true });
     } catch (error) {
@@ -353,19 +285,28 @@ app.delete('/api/conversations/:id', async (req, res) => {
         const { id } = req.params;
         
         // Remove conversation
-        const conversationsData = await readJsonFile(CONVERSATIONS_FILE);
-        conversationsData.conversations = conversationsData.conversations.filter(conv => conv.id !== id);
-        await writeJsonFile(CONVERSATIONS_FILE, conversationsData);
+        const conversationIndex = CONVERSATIONS.findIndex(conv => conv.id === id);
+        if (conversationIndex !== -1) {
+            CONVERSATIONS.splice(conversationIndex, 1);
+        }
         
         // Remove associated messages
-        const messagesData = await readJsonFile(MESSAGES_FILE);
-        messagesData.messages = messagesData.messages.filter(msg => msg.conversation_id !== id);
-        await writeJsonFile(MESSAGES_FILE, messagesData);
+        const messageIndices = [];
+        MESSAGES.forEach((msg, index) => {
+            if (msg.conversationId === id) {
+                messageIndices.unshift(index);
+            }
+        });
+        messageIndices.forEach(index => MESSAGES.splice(index, 1));
         
         // Remove associated debug messages
-        const debugMessagesData = await readJsonFile(DEBUG_MESSAGES_FILE);
-        debugMessagesData.messages = debugMessagesData.messages.filter(msg => msg.conversation_id !== id);
-        await writeJsonFile(DEBUG_MESSAGES_FILE, debugMessagesData);
+        const debugMessageIndices = [];
+        DEBUG_MESSAGES.forEach((msg, index) => {
+            if (msg.conversationId === id) {
+                debugMessageIndices.unshift(index);
+            }
+        });
+        debugMessageIndices.forEach(index => DEBUG_MESSAGES.splice(index, 1));
         
         res.json({ success: true });
     } catch (error) {
@@ -374,12 +315,9 @@ app.delete('/api/conversations/:id', async (req, res) => {
     }
 });
 
-// Initialize data files on server start
-ensureDataFiles().then(() => {
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-        console.log(`\n=== Server Started ===`);
-        console.log(`Server running on port ${PORT}`);
-        console.log('===================\n');
-    });
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`\n=== Server Started ===`);
+    console.log(`Server running on port ${PORT}`);
+    console.log('===================\n');
 });
