@@ -31,7 +31,6 @@
   ],
   "functions": {
     "api/**": {
-      "memory": 3008,
       "maxDuration": 360
     }
   },
