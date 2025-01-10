@@ -29,11 +29,7 @@
       "dest": "/public/$1"
     }
   ],
-  "functions": {
-    "api/**": {
-      "maxDuration": 360
-    }
-  },
+
   "env": {
     "NODE_ENV": "production"
   }
