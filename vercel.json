@@ -29,12 +29,7 @@
       "dest": "/public/$1"
     }
   ],
-  "functions": {
-    "api/**": {
-      "memory": 3008,
-      "maxDuration": 360
-    }
-  },
+ 
   "env": {
     "NODE_ENV": "production"
   }
